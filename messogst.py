@@ -146,7 +146,7 @@ def process_zip_and_combine_data(zip_file_uploader, combo_template_file):
         # This list ensures the copy covers the entire J:O block.
         RAW_FORMULAS = [
             # J: Assuming same formula as K (based on your input)
-            '==VLOOKUP(G{0},' State Mapping'!A:B,2,0)',
+            '=VLOOKUP(G{0},' State Mapping'!A:B,2,0)',
             # K: =IF(J1=$X$22,F1*E1%/2,0)
             '=IF(J{0}=$X$22,F{0}*E{0}/100/2,0)', 
             # L: =IF(J1=$X$22,0,F1*E1%)
