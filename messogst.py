@@ -110,10 +110,8 @@ def process_and_combine_data(sales_file, returns_file, combo_template_file):
 
 
         # --- B. Paste Merged Data starting at B3 (Row 3, Column 2) ---
-        # Data has 7 columns, fitting B to H.
         for r_idx, row in enumerate(dataframe_to_rows(df_merged, header=False, index=False)):
             for c_idx, value in enumerate(row):
-                # Column 2 is B. c_idx runs from 0 to 6 (7 total columns)
                 ws.cell(row=start_row_to_clear + r_idx, column=2 + c_idx, value=value)
         
         st.success(f"Successfully pasted {len(df_merged)} rows starting at B3, ending at Column H.")
@@ -131,7 +129,7 @@ def process_and_combine_data(sales_file, returns_file, combo_template_file):
         return None
 
 # ==============================================================================
-# Streamlit UI (No changes needed here)
+# Streamlit UI
 # ==============================================================================
 st.set_page_config(
     page_title="TCS Data Processor",
@@ -193,11 +191,3 @@ if sales_file and returns_file and combo_template_file:
 st.sidebar.markdown("## 📚 Guidance")
 st.sidebar.markdown("---")
 st.sidebar.warning("**Reminder:** The Pivot Tables will **not** refresh until you open the file in Excel and confirm the refresh due to cloud environment limitations.")
-
----
-The code is finalized and ready to deploy! The only remaining step is to choose your hosting platform.
-
-Which hosting option do you want to proceed with?
-
-1.  **☁️ Streamlit Community Cloud:** Easiest, fastest, and free for simple apps.
-2.  **🔧 General Cloud Hosting (PaaS):** More control using platforms like Render or Heroku.
