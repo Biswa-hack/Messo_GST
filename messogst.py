@@ -144,8 +144,8 @@ def process_zip_and_combine_data(zip_file_uploader, combo_template_file):
         
         # 6 Formulas for J, K, L, M, N, O
         RAW_FORMULAS = [
-            # J: VLOOKUP formula (FIXED - Uses escaped double quotes for the sheet name)
-            "='VLOOKUP(G{0},\" State Mapping\"!A:B,2,0)'",
+            # J: VLOOKUP formula (FIXED - Using the simple sheet name: State_Mapping)
+            "='VLOOKUP(G{0},State_Mapping!A:B,2,0)'",
             # K: (Old J formula) =IF(J1=$X$22,F1*E1%/2,0)
             '=IF(J{0}=$X$22,F{0}*E{0}/100/2,0)', 
             # L: (Old K formula) =IF(J1=$X$22,F1*E1%/2,0)
