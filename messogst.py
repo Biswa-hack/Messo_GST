@@ -6,8 +6,8 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 
 def process_and_combine_data(sales_file, returns_file, combo_template_file):
     """
-    Processes the sales/returns, combines them, and inserts the data into the 
-    'raw' sheet of the combo template starting at B3.
+    Processes the sales/returns, combines them, and inserts the 7 final columns 
+    into the 'raw' sheet of the combo template starting at B3 (B through H).
     """
     
     COLUMN_MAPPING = {
@@ -34,10 +34,9 @@ def process_and_combine_data(sales_file, returns_file, combo_template_file):
         
         df_final = df_processed[required_cols_present].copy()
         
-        # 1. Add the 'TYPE' column
         df_final.loc[:, 'TYPE'] = data_type
         
-        # 2. Handle negative values for Returns (Taxable amount AND Quantity)
+        # Handle negative values for Returns (Taxable amount AND Quantity)
         if data_type == 'Return':
             st.info(f"Applying negative signs to 'tcs_taxable_amount' and 'QTY' for **{data_type}** data.")
             
@@ -62,7 +61,7 @@ def process_and_combine_data(sales_file, returns_file, combo_template_file):
                      df_final['QTY'], errors='coerce'
                  ).abs()
 
-        # 🟢 FINAL ORDER CHANGE: Dropping 'order_date' to limit data to 7 columns (B-H) 🟢
+        # Final 7 columns to fit B-H range (order_date is excluded)
         final_order = ['order_num', 'hsn_code', 'gst_rate', 
                        'tcs_taxable_amount', 'end_customer_state_new', 'TYPE', 'QTY']
         
@@ -71,7 +70,7 @@ def process_and_combine_data(sales_file, returns_file, combo_template_file):
         return df_final[final_order_present]
 
 
-    # 3. Process Sales and Returns Data
+    # 3. Processing and Merging
     df_sales = process_file(sales_file, 'Sale')
     df_returns = process_file(returns_file, 'Return')
     
@@ -111,10 +110,10 @@ def process_and_combine_data(sales_file, returns_file, combo_template_file):
 
 
         # --- B. Paste Merged Data starting at B3 (Row 3, Column 2) ---
-        # The data now has 7 columns, fitting B to H.
+        # Data has 7 columns, fitting B to H.
         for r_idx, row in enumerate(dataframe_to_rows(df_merged, header=False, index=False)):
             for c_idx, value in enumerate(row):
-                # Column 2 is B. The inner loop runs 7 times (B through H)
+                # Column 2 is B. c_idx runs from 0 to 6 (7 total columns)
                 ws.cell(row=start_row_to_clear + r_idx, column=2 + c_idx, value=value)
         
         st.success(f"Successfully pasted {len(df_merged)} rows starting at B3, ending at Column H.")
@@ -194,3 +193,11 @@ if sales_file and returns_file and combo_template_file:
 st.sidebar.markdown("## 📚 Guidance")
 st.sidebar.markdown("---")
 st.sidebar.warning("**Reminder:** The Pivot Tables will **not** refresh until you open the file in Excel and confirm the refresh due to cloud environment limitations.")
+
+---
+The code is finalized and ready to deploy! The only remaining step is to choose your hosting platform.
+
+Which hosting option do you want to proceed with?
+
+1.  **☁️ Streamlit Community Cloud:** Easiest, fastest, and free for simple apps.
+2.  **🔧 General Cloud Hosting (PaaS):** More control using platforms like Render or Heroku.
