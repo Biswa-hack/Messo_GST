@@ -1,74 +1,10 @@
-import streamlit as st
-import pandas as pd
-import io
-import zipfile # Needed to handle the compressed file
-from openpyxl import load_workbook 
-from openpyxl.utils.dataframe import dataframe_to_rows
-
-# (Helper function process_file remains the same as before)
-def process_file(file_data, data_type):
-    COLUMN_MAPPING = {
-        'order_date': 'order_date',
-        'sub_order_num': 'order_num',
-        'hsn_code': 'hsn_code',
-        'gst_rate': 'gst_rate',
-        'total_taxable_sale_value': 'tcs_taxable_amount',
-        'end_customer_state_new': 'end_customer_state_new',
-        'quantity': 'QTY',
-    }
-
-    if file_data is None: return None
-    
-    # Read Excel file from the provided data stream (from the zip archive)
-    df = pd.read_excel(file_data) 
-    
-    df_processed = df.rename(columns=COLUMN_MAPPING)
-    required_cols = list(COLUMN_MAPPING.values())
-    required_cols_present = [col for col in required_cols if col in df_processed.columns]
-    
-    if len(required_cols_present) != len(required_cols):
-        st.warning(f"⚠️ Input file for {data_type} is missing some required columns.")
-    
-    df_final = df_processed[required_cols_present].copy()
-    
-    df_final.loc[:, 'TYPE'] = data_type
-    
-    # Handle negative values for Returns (Taxable amount AND Quantity)
-    if data_type == 'Return':
-        
-        if 'tcs_taxable_amount' in df_final.columns:
-             df_final.loc[:, 'tcs_taxable_amount'] = pd.to_numeric(
-                 df_final['tcs_taxable_amount'], errors='coerce'
-             ).abs() * -1
-        
-        if 'QTY' in df_final.columns:
-             df_final.loc[:, 'QTY'] = pd.to_numeric(
-                 df_final['QTY'], errors='coerce'
-             ).abs() * -1
-        
-    else:
-        # Ensure sales values are positive
-        if 'tcs_taxable_amount' in df_final.columns:
-             df_final.loc[:, 'tcs_taxable_amount'] = pd.to_numeric(
-                 df_final['tcs_taxable_amount'], errors='coerce'
-             ).abs()
-        if 'QTY' in df_final.columns:
-             df_final.loc[:, 'QTY'] = pd.to_numeric(
-                 df_final['QTY'], errors='coerce'
-             ).abs()
-
-    # 🟢 NEW 8-COLUMN FINAL ORDER (B to I) 🟢
-    final_order = ['order_date', 'order_num', 'hsn_code', 'gst_rate', 
-                   'tcs_taxable_amount', 'end_customer_state_new', 'TYPE', 'QTY']
-    
-    final_order_present = [col for col in final_order if col in df_final.columns]
-    
-    return df_final[final_order_present]
-
+# ... (process_file helper function remains unchanged) ...
 
 def process_zip_and_combine_data(zip_file_uploader, combo_template_file):
     """Handles zip extraction, file identification, processing, and merging."""
     
+    # ... (File identification logic remains unchanged) ...
+
     sales_file_data = None
     returns_file_data = None
     
@@ -113,11 +49,9 @@ def process_zip_and_combine_data(zip_file_uploader, combo_template_file):
         return None
         
     df_merged = pd.concat(merged_dfs, ignore_index=True)
-    
-    # Remove columns that are entirely blank (NaN)
     df_merged = df_merged.dropna(axis=1, how='all')
 
-    # 3. Insert Merged Data into Combo Template using openpyxl (Same logic as before)
+    # 3. Insert Merged Data into Combo Template using openpyxl
     try:
         wb = load_workbook(combo_template_file)
         
@@ -127,25 +61,47 @@ def process_zip_and_combine_data(zip_file_uploader, combo_template_file):
             
         ws = wb['raw']
 
-        # --- A. Delete existing data below row B3 ---
+        # --- A. CLEAR CELLS B3:I[MAX_ROW] (Preserve Formulas in J-O) ---
         start_row_to_clear = 3
-        max_row = ws.max_row
         
-        if max_row >= start_row_to_clear:
-            rows_to_delete = max_row - start_row_to_clear + 1
-            ws.delete_rows(start_row_to_clear, rows_to_delete)
+        if ws.max_row >= start_row_to_clear:
+            rows_to_clear = list(range(start_row_to_clear, ws.max_row + 1))
+            
+            # 🟢 FIX 1: Clear data columns B to I (Column 2 to 9) 🟢
+            for row_idx in rows_to_clear:
+                for col_idx in range(2, 10): # Columns 2 (B) through 9 (I)
+                    ws.cell(row=row_idx, column=col_idx).value = None
+            st.info(f"Cleared old data from columns B:I starting at row 3.")
 
-
-        # --- B. Paste Merged Data starting at B3 (Row 3, Column 2) ---
+        # --- B. Paste Merged Data starting at B3 ---
         # Data has 8 columns, fitting B to I.
         for r_idx, row in enumerate(dataframe_to_rows(df_merged, header=False, index=False)):
             for c_idx, value in enumerate(row):
-                # Column 2 is B. c_idx runs from 0 to 7 (8 total columns)
                 ws.cell(row=start_row_to_clear + r_idx, column=2 + c_idx, value=value)
         
-        st.success(f"Successfully pasted {len(df_merged)} rows starting at B3, ending at Column I.")
+        new_max_row = start_row_to_clear + len(df_merged) - 1
+        st.success(f"Successfully pasted {len(df_merged)} rows (B3 to I{new_max_row}).")
+        
+        # --- C. COPY FORMULAS DOWN (J3:O3 to J[LastRow]:O[LastRow]) ---
+        # The master formulas are assumed to be in row 3.
+        formula_start_col = 10 # J
+        formula_end_col = 15   # O
+        
+        if len(df_merged) > 0:
+            # 🟢 FIX 2: Copy formulas from the master row (Row 3) down 🟢
+            for row_idx in range(start_row_to_clear + 1, new_max_row + 1):
+                for col_idx in range(formula_start_col, formula_end_col + 1):
+                    source_cell = ws.cell(row=start_row_to_clear, column=col_idx) # Row 3
+                    target_cell = ws.cell(row=row_idx, column=col_idx)
+                    
+                    # Copy the formula content
+                    if source_cell.value and isinstance(source_cell.value, str) and source_cell.value.startswith('='):
+                        target_cell.value = source_cell.value
+        
+            st.info(f"Copied formulas from J3:O3 down to J{new_max_row}:O{new_max_row}.")
+            
 
-        st.warning("⚠️ **Pivot Table Refresh:** Refreshing Pivot Tables is NOT possible on this cloud service. Please ensure the Pivot Tables in your template are set to **'Refresh data when opening the file'** in Excel before you download the output.")
+        st.warning("⚠️ **Pivot Table Refresh:** Refreshing Pivot Tables is NOT possible on this cloud service...")
         
         output = io.BytesIO()
         wb.save(output)
@@ -156,55 +112,4 @@ def process_zip_and_combine_data(zip_file_uploader, combo_template_file):
         st.error(f"❌ An error occurred during file manipulation: {e}")
         return None
 
-# ==============================================================================
-# Streamlit UI (Modified for ZIP upload)
-# ==============================================================================
-st.set_page_config(
-    page_title="TCS Data Processor",
-    layout="wide",
-    initial_sidebar_state="auto"
-)
-
-st.title("📊 TCS Data Integration & Template Filler")
-st.markdown("---")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    st.subheader("1. Zipped Sales & Returns Data")
-    zipped_files = st.file_uploader(
-        "Upload a single ZIP file containing both the Sales and Returns Excel sheets",
-        type=['zip'], # Only accept zip files
-        key='zipped_files'
-    )
-
-with col2:
-    st.subheader("2. Combo Template")
-    combo_template_file = st.file_uploader(
-        "Upload the Combo Template (with 'raw' sheet)",
-        type=['xlsx', 'xls'],
-        key='combo'
-    )
-    st.info("Template must contain a sheet named **'raw'**.")
-
-
-st.markdown("---")
-
-# 3. Processing and Download
-if zipped_files and combo_template_file:
-    st.subheader("3. Process and Download")
-    
-    if st.button("🚀 Generate Final Combo Report"):
-        with st.spinner('Processing ZIP, integrating data, and saving...'):
-            processed_excel_data = process_zip_and_combine_data(zipped_files, combo_template_file)
-
-        if processed_excel_data:
-            st.download_button(
-                label="⬇️ Download Modified Combo Report.xlsx",
-                data=processed_excel_data,
-                file_name="Modified_Combo_Report.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-            st.balloons()
-        else:
-            st.error("❌ Failed to process data. Please check file contents and try again.")
+# ... (Streamlit UI code remains unchanged) ...
