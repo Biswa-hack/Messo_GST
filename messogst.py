@@ -66,21 +66,22 @@ def process_zip_and_combine_data(zip_file_uploader, combo_template_file):
         new_max_row = start_row_to_clear + len(df_merged) - 1
         st.success(f"Successfully pasted {len(df_merged)} rows (B3 to I{new_max_row}).")
         
-        # --- C. COPY FORMULAS DOWN (K1:O1 to K2:O[LastRow]) ---
+        # --- C. COPY FORMULAS DOWN (J1:O1 to J3:O[LastRow]) ---
         master_formula_row = 1 
-        formula_target_start_row = 2 # 🟢 UPDATED: Start copying formulas from Row 2
-        formula_start_col = 11 # K 
+        formula_target_start_row = 3 # 🟢 FINAL: Start copying formulas from Row 3
+        formula_start_col = 10 # J 
         formula_end_col = 15   # O
         
         if len(df_merged) > 0:
             for row_idx in range(formula_target_start_row, new_max_row + 1): 
                 for col_idx in range(formula_start_col, formula_end_col + 1):
+                    # Get the value (which should be the formula string) from the master row (Row 1)
                     source_value = ws.cell(row=master_formula_row, column=col_idx).value
                     
                     if isinstance(source_value, str) and source_value.startswith('='):
                         ws.cell(row=row_idx, column=col_idx).value = source_value
         
-            st.info(f"Copied formulas from K1:O1 down to K{new_max_row}:O{new_max_row}.")
+            st.info(f"Copied formulas from J1:O1 down to J{new_max_row}:O{new_max_row}.")
             
         st.warning("⚠️ **Pivot Table Refresh:** Please ensure the Pivot Tables are set to 'Refresh data when opening the file' in Excel.")
         
