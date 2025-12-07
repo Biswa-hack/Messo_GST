@@ -5,25 +5,88 @@ import zipfile
 from openpyxl import load_workbook 
 from openpyxl.utils.dataframe import dataframe_to_rows
 
-# --- GLOBAL MAPPING and process_file function remain the same ---
+# --- GLOBAL MAPPING ---
+COLUMN_MAPPING = {
+    'order_date': 'order_date',
+    'sub_order_num': 'order_num',
+    'hsn_code': 'hsn_code',
+    'gst_rate': 'gst_rate',
+    'total_taxable_sale_value': 'tcs_taxable_amount',
+    'end_customer_state_new': 'end_customer_state_new',
+    'quantity': 'QTY',
+}
 
+
+# --- HELPER FUNCTION: PROCESS SINGLE FILE ---
+def process_file(file_data, data_type):
+    """Processes a single file (sales or returns) from the ZIP archive."""
+    
+    if file_data is None: return None
+    
+    # Read Excel file from the provided data stream (from the zip archive)
+    df = pd.read_excel(file_data) 
+    
+    # 1. Apply column renaming using the global map
+    df_processed = df.rename(columns=COLUMN_MAPPING)
+    required_cols = list(COLUMN_MAPPING.values())
+    required_cols_present = [col for col in required_cols if col in df_processed.columns]
+    
+    if len(required_cols_present) != len(required_cols):
+        st.warning(f"⚠️ Input file for {data_type} is missing some required columns.")
+    
+    df_final = df_processed[required_cols_present].copy()
+    df_final.loc[:, 'TYPE'] = data_type
+    
+    # 2. Handle negative values for Returns 
+    if data_type == 'Return':
+        if 'tcs_taxable_amount' in df_final.columns:
+             df_final.loc[:, 'tcs_taxable_amount'] = pd.to_numeric(
+                 df_final['tcs_taxable_amount'], errors='coerce'
+             ).abs() * -1
+        
+        if 'QTY' in df_final.columns:
+             df_final.loc[:, 'QTY'] = pd.to_numeric(
+                 df_final['QTY'], errors='coerce'
+             ).abs() * -1
+            
+    else:
+        # Ensure sales values are positive
+        if 'tcs_taxable_amount' in df_final.columns:
+             df_final.loc[:, 'tcs_taxable_amount'] = pd.to_numeric(
+                 df_final['tcs_taxable_amount'], errors='coerce'
+             ).abs()
+        if 'QTY' in df_final.columns:
+             df_final.loc[:, 'QTY'] = pd.to_numeric(
+                 df_final['QTY'], errors='coerce'
+             ).abs()
+
+    # 3. Final 8-column order (B to I)
+    final_order = ['order_date', 'order_num', 'hsn_code', 'gst_rate', 
+                   'tcs_taxable_amount', 'end_customer_state_new', 'TYPE', 'QTY']
+    
+    final_order_present = [col for col in final_order if col in df_final.columns]
+    
+    return df_final[final_order_present]
+
+
+# --- MAIN FUNCTION: PROCESS ZIP AND COMBO ---
 def process_zip_and_combine_data(zip_file_uploader, combo_template_file):
     """Handles zip extraction, file identification, processing, and Excel output."""
     
     sales_file_data = None
     returns_file_data = None
     
-    # 1. Unzip and Identify Files (Logic remains unchanged)
+    # 1. Unzip and Identify Files
     try:
         with zipfile.ZipFile(io.BytesIO(zip_file_uploader.read())) as z:
             for name in z.namelist():
                 if name.endswith('.xlsx') or name.endswith('.xls'):
                     if 'return' in name.lower() or 'rtn' in name.lower():
                         returns_file_data = z.open(name)
-                        st.info(f"Identified Returns file: {name}")
+                        #st.info(f"Identified Returns file: {name}")
                     else:
                         sales_file_data = z.open(name)
-                        st.info(f"Identified Sales file: {name}")
+                        #st.info(f"Identified Sales file: {name}")
             
             if not sales_file_data or not returns_file_data:
                  st.error("❌ Could not identify both 'Sales' and 'Returns' files inside the ZIP.")
@@ -36,7 +99,7 @@ def process_zip_and_combine_data(zip_file_uploader, combo_template_file):
         st.error(f"❌ An unexpected error occurred during zip processing: {e}")
         return None
 
-    # 2. Process Data and Merge (Logic remains unchanged)
+    # 2. Process Data and Merge
     df_sales = process_file(sales_file_data, 'Sale')
     df_returns = process_file(returns_file_data, 'Return')
     
@@ -65,7 +128,7 @@ def process_zip_and_combine_data(zip_file_uploader, combo_template_file):
         if ws.max_row >= start_row_to_clear:
             rows_to_clear = list(range(start_row_to_clear, ws.max_row + 1))
             for row_idx in rows_to_clear:
-                for col_idx in range(2, 10):
+                for col_idx in range(2, 10): # Columns 2 (B) through 9 (I)
                     ws.cell(row=row_idx, column=col_idx).value = None
             st.info(f"Cleared old data from columns B:I starting at row 3.")
 
@@ -82,13 +145,10 @@ def process_zip_and_combine_data(zip_file_uploader, combo_template_file):
         formula_end_col = 15   
         
         if len(df_merged) > 0:
-            # 🟢 NEW ROBUST FORMULA COPY LOGIC 🟢
             for row_idx in range(start_row_to_clear + 1, new_max_row + 1):
                 for col_idx in range(formula_start_col, formula_end_col + 1):
-                    # Get the formula string from the master row (Row 3)
                     formula_to_copy = ws.cell(row=start_row_to_clear, column=col_idx).formula
                     
-                    # If a formula exists, copy it to the target cell's value
                     if formula_to_copy is not None:
                         ws.cell(row=row_idx, column=col_idx).value = formula_to_copy
         
@@ -105,4 +165,74 @@ def process_zip_and_combine_data(zip_file_uploader, combo_template_file):
         st.error(f"❌ An error occurred during file manipulation: {e}")
         return None
 
-# --- Streamlit UI code remains the same ---
+# ==============================================================================
+# Streamlit UI
+# ==============================================================================
+st.set_page_config(
+    page_title="TCS Data Processor",
+    layout="wide",
+    initial_sidebar_state="auto"
+)
+
+st.title("📊 TCS Data Integration & Template Filler")
+st.markdown("---")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.subheader("1. Zipped Sales & Returns Data")
+    zipped_files = st.file_uploader(
+        "Upload a single ZIP file containing both the Sales and Returns Excel sheets",
+        type=['zip'],
+        key='zipped_files'
+    )
+
+with col2:
+    st.subheader("2. Combo Template")
+    combo_template_file = st.file_uploader(
+        "Upload the Combo Template (with 'raw' sheet)",
+        type=['xlsx', 'xls'],
+        key='combo'
+    )
+    st.info("Template must contain a sheet named **'raw'**.")
+
+
+st.markdown("---")
+
+# 3. Processing and Download
+if zipped_files and combo_template_file:
+    st.subheader("3. Process and Download")
+    
+    if st.button("🚀 Generate Final Combo Report"):
+        with st.spinner('Processing ZIP, integrating data, and saving...'):
+            processed_excel_data = process_zip_and_combine_data(zipped_files, combo_template_file)
+
+        if processed_excel_data:
+            st.download_button(
+                label="⬇️ Download Modified Combo Report.xlsx",
+                data=processed_excel_data,
+                file_name="Modified_Combo_Report.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+            st.balloons()
+        else:
+            st.error("❌ Failed to process data. Please check file contents and try again.")
+
+st.sidebar.markdown("## 📚 Guidance")
+st.sidebar.markdown("---")
+st.sidebar.warning("**Reminder:** The Pivot Tables will **not** refresh until you open the file in Excel and confirm the refresh due to cloud environment limitations.")
+
+---
+
+### 2. Dependency Check (The Prerequisite)
+
+If the Streamlit page still doesn't load after using the clean code above, we must confirm the project dependencies.
+
+A failure to load the Streamlit page is almost always because the program cannot find a required library (like `pandas` or `openpyxl`).
+
+For successful deployment, you need a **`requirements.txt`** file in the same directory as your Python script containing these exact three lines:
+
+```text
+streamlit
+pandas
+openpyxl
