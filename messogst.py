@@ -1,44 +1,5 @@
 def process_zip_and_combine_data(zip_file_uploader, combo_template_file):
-    """Handles zip extraction, file identification, processing, and Excel output."""
-    
-    sales_file_data = None
-    returns_file_data = None
-    
-    # 1. Unzip and Identify Files
-    try:
-        with zipfile.ZipFile(io.BytesIO(zip_file_uploader.read())) as z:
-            for name in z.namelist():
-                if name.endswith('.xlsx') or name.endswith('.xls'):
-                    if 'return' in name.lower() or 'rtn' in name.lower():
-                        returns_file_data = z.open(name)
-                    else:
-                        sales_file_data = z.open(name)
-            
-            if not sales_file_data or not returns_file_data:
-                 st.error("❌ Could not identify both 'Sales' and 'Returns' files inside the ZIP.")
-                 return None
-
-    except zipfile.BadZipFile:
-        st.error("❌ The uploaded file is not a valid ZIP archive.")
-        return None
-    except Exception as e:
-        st.error(f"❌ An unexpected error occurred during zip processing: {e}")
-        return None
-
-    # 2. Process Data and Merge
-    df_sales = process_file(sales_file_data, 'Sale')
-    df_returns = process_file(returns_file_data, 'Return')
-    
-    merged_dfs = []
-    if df_sales is not None: merged_dfs.append(df_sales)
-    if df_returns is not None: merged_dfs.append(df_returns)
-
-    if not merged_dfs:
-        st.error("❌ No valid sales or returns data was processed.")
-        return None
-        
-    df_merged = pd.concat(merged_dfs, ignore_index=True)
-    df_merged = df_merged.dropna(axis=1, how='all')
+    # ... (Sections 1 and 2 remain unchanged) ...
 
     # 3. Insert Merged Data into Combo Template
     try:
@@ -66,22 +27,22 @@ def process_zip_and_combine_data(zip_file_uploader, combo_template_file):
         new_max_row = start_row_to_clear + len(df_merged) - 1
         st.success(f"Successfully pasted {len(df_merged)} rows (B3 to I{new_max_row}).")
         
-        # --- C. COPY FORMULAS DOWN (J3:O3 to J[LastRow]:O[LastRow]) ---
-        formula_start_col = 10 
-        formula_end_col = 15   
+        # --- C. COPY FORMULAS DOWN (K1:O1 to K3:O[LastRow]) ---
+        master_formula_row = 1 # 🟢 UPDATED: Source row is now 1
+        formula_start_col = 11 # K 
+        formula_end_col = 15   # O
         
         if len(df_merged) > 0:
-            # 🟢 NEW: Using .value and checking for '=' 🟢
-            for row_idx in range(start_row_to_clear + 1, new_max_row + 1):
+            for row_idx in range(start_row_to_clear, new_max_row + 1): # Start copying from Row 3 down
                 for col_idx in range(formula_start_col, formula_end_col + 1):
-                    # Get the value (which should be the formula string) from the master row (Row 3)
-                    source_value = ws.cell(row=start_row_to_clear, column=col_idx).value
                     
-                    # Check if the value is a string starting with '=' (a formula)
+                    # Get the value (which should be the formula string) from the master row (Row 1)
+                    source_value = ws.cell(row=master_formula_row, column=col_idx).value
+                    
                     if isinstance(source_value, str) and source_value.startswith('='):
                         ws.cell(row=row_idx, column=col_idx).value = source_value
         
-            st.info(f"Copied formulas from J3:O3 down to J{new_max_row}:O{new_max_row}.")
+            st.info(f"Copied formulas from K1:O1 down to K{new_max_row}:O{new_max_row}.")
             
         st.warning("⚠️ **Pivot Table Refresh:** Please ensure the Pivot Tables are set to 'Refresh data when opening the file' in Excel.")
         
@@ -91,5 +52,6 @@ def process_zip_and_combine_data(zip_file_uploader, combo_template_file):
         return output.getvalue()
         
     except Exception as e:
+        # Keep this for debugging the file manipulation error
         st.error(f"❌ An error occurred during file manipulation: {e}")
         return None
