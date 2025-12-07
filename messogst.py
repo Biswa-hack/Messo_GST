@@ -25,7 +25,6 @@ def process_and_combine_data(sales_file, returns_file, combo_template_file):
         if uploaded_file is None: return None
         df = pd.read_excel(uploaded_file)
         
-        # 1. Apply the column renaming
         df_processed = df.rename(columns=COLUMN_MAPPING)
         required_cols = list(COLUMN_MAPPING.values())
         required_cols_present = [col for col in required_cols if col in df_processed.columns]
@@ -35,20 +34,18 @@ def process_and_combine_data(sales_file, returns_file, combo_template_file):
         
         df_final = df_processed[required_cols_present].copy()
         
-        # 2. Add the 'TYPE' column
+        # 1. Add the 'TYPE' column
         df_final.loc[:, 'TYPE'] = data_type
         
-        # 3. Handle negative values for Returns (Taxable amount AND Quantity)
+        # 2. Handle negative values for Returns (Taxable amount AND Quantity)
         if data_type == 'Return':
             st.info(f"Applying negative signs to 'tcs_taxable_amount' and 'QTY' for **{data_type}** data.")
             
-            # Negate Taxable Amount
             if 'tcs_taxable_amount' in df_final.columns:
                  df_final.loc[:, 'tcs_taxable_amount'] = pd.to_numeric(
                      df_final['tcs_taxable_amount'], errors='coerce'
                  ).abs() * -1
             
-            # Negate Quantity
             if 'QTY' in df_final.columns:
                  df_final.loc[:, 'QTY'] = pd.to_numeric(
                      df_final['QTY'], errors='coerce'
@@ -65,14 +62,16 @@ def process_and_combine_data(sales_file, returns_file, combo_template_file):
                      df_final['QTY'], errors='coerce'
                  ).abs()
 
-        final_order = ['order_date', 'order_num', 'hsn_code', 'gst_rate', 
+        # 🟢 FINAL ORDER CHANGE: Dropping 'order_date' to limit data to 7 columns (B-H) 🟢
+        final_order = ['order_num', 'hsn_code', 'gst_rate', 
                        'tcs_taxable_amount', 'end_customer_state_new', 'TYPE', 'QTY']
+        
         final_order_present = [col for col in final_order if col in df_final.columns]
         
         return df_final[final_order_present]
 
 
-    # 4. Process Sales and Returns Data
+    # 3. Process Sales and Returns Data
     df_sales = process_file(sales_file, 'Sale')
     df_returns = process_file(returns_file, 'Return')
     
@@ -86,12 +85,11 @@ def process_and_combine_data(sales_file, returns_file, combo_template_file):
         
     df_merged = pd.concat(merged_dfs, ignore_index=True)
     
-    # ⭐ FINAL FIX: Remove columns that are entirely blank (NaN) ⭐
+    # Remove columns that are entirely blank (NaN)
     st.info("Cleaning up merged data: removing columns that are completely empty.")
-    # axis=1 means drop columns, how='all' means drop only if ALL values are NaN
     df_merged = df_merged.dropna(axis=1, how='all')
 
-    # 5. Insert Merged Data into Combo Template using openpyxl
+    # 4. Insert Merged Data into Combo Template using openpyxl
     try:
         wb = load_workbook(combo_template_file)
         
@@ -113,11 +111,13 @@ def process_and_combine_data(sales_file, returns_file, combo_template_file):
 
 
         # --- B. Paste Merged Data starting at B3 (Row 3, Column 2) ---
+        # The data now has 7 columns, fitting B to H.
         for r_idx, row in enumerate(dataframe_to_rows(df_merged, header=False, index=False)):
             for c_idx, value in enumerate(row):
+                # Column 2 is B. The inner loop runs 7 times (B through H)
                 ws.cell(row=start_row_to_clear + r_idx, column=2 + c_idx, value=value)
         
-        st.success(f"Successfully pasted {len(df_merged)} rows starting at B3.")
+        st.success(f"Successfully pasted {len(df_merged)} rows starting at B3, ending at Column H.")
 
         # --- C. Refresh Pivot Tables (Warning remains) ---
         st.warning("⚠️ **Pivot Table Refresh:** Refreshing Pivot Tables is NOT possible on this cloud service. Please ensure the Pivot Tables in your template are set to **'Refresh data when opening the file'** in Excel before you download the output.")
