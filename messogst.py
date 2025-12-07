@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import io
-# Need openpyxl for reading/writing the combo template precisely
 from openpyxl import load_workbook 
 from openpyxl.utils.dataframe import dataframe_to_rows
 
@@ -18,7 +17,7 @@ def process_and_combine_data(sales_file, returns_file, combo_template_file):
         'gst_rate': 'gst_rate',
         'total_taxable_sale_value': 'tcs_taxable_amount',
         'end_customer_state_new': 'end_customer_state_new',
-        'quantity': 'QTY', # Mapping the input 'quantity' to output 'QTY'
+        'quantity': 'QTY',
     }
 
     # --- Helper function for processing a single file ---
@@ -43,13 +42,13 @@ def process_and_combine_data(sales_file, returns_file, combo_template_file):
         if data_type == 'Return':
             st.info(f"Applying negative signs to 'tcs_taxable_amount' and 'QTY' for **{data_type}** data.")
             
-            # Negate Taxable Amount (Existing Logic)
+            # Negate Taxable Amount
             if 'tcs_taxable_amount' in df_final.columns:
                  df_final.loc[:, 'tcs_taxable_amount'] = pd.to_numeric(
                      df_final['tcs_taxable_amount'], errors='coerce'
                  ).abs() * -1
             
-            # 🟢 NEW LOGIC: Negate Quantity 🟢
+            # Negate Quantity
             if 'QTY' in df_final.columns:
                  df_final.loc[:, 'QTY'] = pd.to_numeric(
                      df_final['QTY'], errors='coerce'
@@ -65,7 +64,6 @@ def process_and_combine_data(sales_file, returns_file, combo_template_file):
                  df_final.loc[:, 'QTY'] = pd.to_numeric(
                      df_final['QTY'], errors='coerce'
                  ).abs()
-
 
         final_order = ['order_date', 'order_num', 'hsn_code', 'gst_rate', 
                        'tcs_taxable_amount', 'end_customer_state_new', 'TYPE', 'QTY']
@@ -87,13 +85,16 @@ def process_and_combine_data(sales_file, returns_file, combo_template_file):
         return None
         
     df_merged = pd.concat(merged_dfs, ignore_index=True)
+    
+    # ⭐ FINAL FIX: Remove columns that are entirely blank (NaN) ⭐
+    st.info("Cleaning up merged data: removing columns that are completely empty.")
+    # axis=1 means drop columns, how='all' means drop only if ALL values are NaN
+    df_merged = df_merged.dropna(axis=1, how='all')
 
     # 5. Insert Merged Data into Combo Template using openpyxl
     try:
-        # Load the workbook from the uploaded file's byte stream
         wb = load_workbook(combo_template_file)
         
-        # Select the 'raw' sheet
         if 'raw' not in wb.sheetnames:
             st.error("❌ Error: The 'combo' file must contain a sheet named 'raw'.")
             return None
@@ -106,18 +107,14 @@ def process_and_combine_data(sales_file, returns_file, combo_template_file):
         max_row = ws.max_row
         
         if max_row >= start_row_to_clear:
-            # Delete rows starting from row 3 down to the end of the sheet
             rows_to_delete = max_row - start_row_to_clear + 1
             ws.delete_rows(start_row_to_clear, rows_to_delete)
             st.info(f"Cleared {rows_to_delete} potential old rows in the 'raw' sheet.")
 
 
         # --- B. Paste Merged Data starting at B3 (Row 3, Column 2) ---
-        # Use dataframe_to_rows to write the data without headers (header=False)
         for r_idx, row in enumerate(dataframe_to_rows(df_merged, header=False, index=False)):
             for c_idx, value in enumerate(row):
-                # Target cell: B3 (Row 3, Col 2). 
-                # Openpyxl is 1-indexed. Column 2 is B.
                 ws.cell(row=start_row_to_clear + r_idx, column=2 + c_idx, value=value)
         
         st.success(f"Successfully pasted {len(df_merged)} rows starting at B3.")
@@ -125,7 +122,6 @@ def process_and_combine_data(sales_file, returns_file, combo_template_file):
         # --- C. Refresh Pivot Tables (Warning remains) ---
         st.warning("⚠️ **Pivot Table Refresh:** Refreshing Pivot Tables is NOT possible on this cloud service. Please ensure the Pivot Tables in your template are set to **'Refresh data when opening the file'** in Excel before you download the output.")
         
-        # Save the modified workbook to a BytesIO object
         output = io.BytesIO()
         wb.save(output)
         
