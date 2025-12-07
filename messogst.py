@@ -143,20 +143,20 @@ def process_zip_and_combine_data(zip_file_uploader, combo_template_file):
         formula_target_start_row = 3
         
         # 6 Formulas for J, K, L, M, N, O
-        # This list ensures the copy covers the entire J:O block.
+        # J now uses the VLOOKUP formula with robust sheet name quoting
         RAW_FORMULAS = [
-            # J: Assuming same formula as K (based on your input)
-            "='VLOOKUP(G{0},''State Mapping''!A:B,2,0)'",
+            # J: VLOOKUP formula - Uses robust OpenPyXL quoting for sheet name with spaces
+            "='VLOOKUP(G{0},'' State Mapping''!A:B,2,0)'",
             # K: =IF(J1=$X$22,F1*E1%/2,0)
             '=IF(J{0}=$X$22,F{0}*E{0}/100/2,0)', 
             # L: =IF(J1=$X$22,0,F1*E1%)
-            '=IF(J{0}=$X$22,F{0}*E{0}/100/2,0)',
-            # M: =K1+L1+M1+F1
             '=IF(J{0}=$X$22,0,F{0}*E{0}/100)',
-            # N: =(M1+L1+K1)/F1 (Percentage check removed)
+            # M: =K1+L1+M1+F1
             '=K{0}+L{0}+M{0}+F{0}',
+            # N: =(M1+L1+K1)/F1
+            '=(M{0}+L{0}+K{0})/F{0}',
             # O: Placeholder for the 6th column
-            '=(M{0}+L{0}+K{0})/F{0}'
+            '=""'
         ]
         
         # Formulas will be pasted starting at Column J (index 10)
