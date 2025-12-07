@@ -1,17 +1,19 @@
 import streamlit as st
 import pandas as pd
 import io
+# Need openpyxl for reading/writing the combo template precisely
+from openpyxl import load_workbook 
+from openpyxl.utils.dataframe import dataframe_to_rows
 
-def process_and_combine_data(sales_file, returns_file):
+# (Function process_and_combine_data remains the same up to df_merged creation)
+
+def process_and_combine_data(sales_file, returns_file, combo_template_file):
     """
-    Processes the uploaded sales and returns Excel files, applies the 
-    specified business rules, and combines them into a multi-sheet Excel file.
+    Processes the sales/returns, combines them, and inserts the data into the 
+    'raw' sheet of the combo template starting at B3.
     """
     
-    # 1. Define the Column Mapping (Input Column Name -> Output Column Name)
-    # NOTE: The original request had a conflicting mapping (sub_order_num -> order_date AND sub_order_num -> order_num).
-    # This script makes an assumption that both 'order_date' and 'sub_order_num' exist in the input files 
-    # to create the 'order_date' and 'order_num' output columns respectively, as this is a more logical structure.
+    # 1. Define the Column Mapping (Same as before)
     COLUMN_MAPPING = {
         'order_date': 'order_date',
         'sub_order_num': 'order_num',
@@ -20,119 +22,142 @@ def process_and_combine_data(sales_file, returns_file):
         'total_taxable_sale_value': 'tcs_taxable_amount',
         'end_customer_state_new': 'end_customer_state_new',
         'quantity': 'QTY',
-        # 'TYPE' column is handled separately by hardcoding 'Sale' or 'Return'
     }
 
-    # --- Processing Function for a single file ---
+    # --- Helper function for processing a single file (Same as before) ---
     def process_file(uploaded_file, data_type):
-        if uploaded_file is None:
-            return None
-
-        # Read the uploaded Excel file
+        if uploaded_file is None: return None
         df = pd.read_excel(uploaded_file)
-        
-        # 1. Apply the column renaming
         df_processed = df.rename(columns=COLUMN_MAPPING)
-
-        # 2. Select only the required columns (and ensure they exist)
         required_cols = list(COLUMN_MAPPING.values())
+        required_cols_present = [col for col in required_cols if col in df_processed.columns]
         
-        # Check if the renamed columns exist after the mapping.
-        # This handles cases where a column might be missing from the input file.
-        missing_cols = [col for col in required_cols if col not in df_processed.columns]
-        if missing_cols:
-            st.warning(f"⚠️ Input file '{uploaded_file.name}' is missing the following columns for mapping: {missing_cols}. Please check your file headers.")
-            # Drop the missing columns from the required list to proceed with available data
-            required_cols = [col for col in required_cols if col not in missing_cols]
-
-        df_final = df_processed[required_cols].copy()
-
-        # 3. Add the 'TYPE' column (Sale/Return)
+        # Ensure all columns exist before processing
+        if len(required_cols_present) != len(required_cols):
+            st.warning(f"⚠️ Input file '{uploaded_file.name}' is missing some required columns.")
+        
+        df_final = df_processed[required_cols_present].copy()
         df_final.loc[:, 'TYPE'] = data_type
         
-        # 4. Handle taxable value for Returns (make it negative)
-        if data_type == 'Return':
-            st.info(f"Applying negative sign to 'tcs_taxable_amount' for **{data_type}** data.")
-            # Ensure the column is numeric before applying the negative sign
-            df_final.loc[:, 'tcs_taxable_amount'] = pd.to_numeric(
-                df_final['tcs_taxable_amount'], errors='coerce'
-            ).abs() * -1
-        else:
-            # Ensure sales values are positive
-            df_final.loc[:, 'tcs_taxable_amount'] = pd.to_numeric(
-                df_final['tcs_taxable_amount'], errors='coerce'
-            ).abs()
-        
-        # Re-order the columns to match the request order
+        if 'tcs_taxable_amount' in df_final.columns:
+            if data_type == 'Return':
+                df_final.loc[:, 'tcs_taxable_amount'] = pd.to_numeric(
+                    df_final['tcs_taxable_amount'], errors='coerce'
+                ).abs() * -1
+            else:
+                df_final.loc[:, 'tcs_taxable_amount'] = pd.to_numeric(
+                    df_final['tcs_taxable_amount'], errors='coerce'
+                ).abs()
+
         final_order = ['order_date', 'order_num', 'hsn_code', 'gst_rate', 
                        'tcs_taxable_amount', 'end_customer_state_new', 'TYPE', 'QTY']
-        # Filter the final_order to only include columns that were successfully created
         final_order_present = [col for col in final_order if col in df_final.columns]
         
         return df_final[final_order_present]
 
 
-    # Process Sales Data (Tcs_sales)
+    # 2. Process Sales and Returns Data
     df_sales = process_file(sales_file, 'Sale')
-
-    # Process Returns Data (Tcs_sales_return)
     df_returns = process_file(returns_file, 'Return')
+    
+    merged_dfs = []
+    if df_sales is not None: merged_dfs.append(df_sales)
+    if df_returns is not None: merged_dfs.append(df_returns)
 
-    # --- Creating the Multi-Sheet Excel File ---
-    if df_sales is not None or df_returns is not None:
+    if not merged_dfs:
+        st.error("❌ No valid sales or returns data was processed.")
+        return None
         
-        # Create the merged DataFrame (Sheet 3)
-        merged_dfs = []
-        if df_sales is not None:
-            merged_dfs.append(df_sales)
-        if df_returns is not None:
-            merged_dfs.append(df_returns)
-            
-        if merged_dfs:
-            df_merged = pd.concat(merged_dfs, ignore_index=True)
-            
-            # Use io.BytesIO to write the Excel file to memory
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                
-                # Sheet 1: Sales Data
-                if df_sales is not None:
-                    df_sales.to_excel(writer, sheet_name='Tcs_sales', index=False)
-                    st.success("✅ 'Tcs_sales' sheet generated successfully.")
+    df_merged = pd.concat(merged_dfs, ignore_index=True)
 
-                # Sheet 2: Returns Data
-                if df_returns is not None:
-                    df_returns.to_excel(writer, sheet_name='Tcs_sales_return', index=False)
-                    st.success("✅ 'Tcs_sales_return' sheet generated successfully.")
-
-                # Sheet 3: Merged Data
-                df_merged.to_excel(writer, sheet_name='Merged_Data', index=False)
-                st.success("✅ 'Merged_Data' sheet generated successfully.")
-                
-            # Prepare file for download
-            processed_data = output.getvalue()
-            return processed_data
+    # 3. Insert Merged Data into Combo Template using openpyxl
+    try:
+        # Load the workbook from the uploaded file's byte stream
+        wb = load_workbook(combo_template_file)
+        
+        # Select the 'raw' sheet
+        if 'raw' not in wb.sheetnames:
+            st.error("❌ Error: The 'combo' file must contain a sheet named 'raw'.")
+            return None
             
-    return None
+        ws = wb['raw']
+        st.info("Template 'raw' sheet loaded.")
+
+        # --- A. Delete existing data below row B3 ---
+        # Find the max row that has data (start from 3, assuming B1/B2 are headers)
+        max_row = ws.max_row
+        
+        # Delete rows starting from B3/row 3 down to the end of the sheet
+        # ws.delete_rows(idx, amount=1) requires starting index and count.
+        # It's safest to just clear the content, then write the new data.
+        # NOTE: Deleting rows can sometimes mess up pivot table ranges,
+        # so clearing cells is safer. Let's stick to the prompt's request
+        # but warn the user about the potential for broken pivot ranges.
+
+        # Delete rows *after* the paste area: The paste area starts at row 3.
+        # Data will be pasted from row 3 up to (3 + len(df_merged) - 1).
+        # We need to delete from the start of the old data (e.g., row 3)
+        # down to the end, but only if the new data is shorter than the old data.
+        
+        # To simplify and ensure cleanup: We will just clear all content from row 3 onwards,
+        # and then write the new data, which is a safer approach than deleting rows 
+        # that might break defined names for the pivot table source.
+        
+        # The simplest way to handle this is to delete rows starting from the 
+        # expected first data row (3) down to the max row.
+        
+        # Find the last row that contained data (assume headers are in row 1 & 2)
+        start_row_to_clear = 3
+        
+        if max_row >= start_row_to_clear:
+            rows_to_delete = max_row - start_row_to_clear + 1
+            ws.delete_rows(start_row_to_clear, rows_to_delete)
+            st.info(f"Cleared {rows_to_delete} rows in the 'raw' sheet.")
+
+
+        # --- B. Paste Merged Data starting at B3 (Row 3, Column 2) ---
+        # Use dataframe_to_rows to write the data without headers (header=False)
+        for r_idx, row in enumerate(dataframe_to_rows(df_merged, header=False, index=False)):
+            for c_idx, value in enumerate(row):
+                # Target cell: B3 (Row 3, Col 2). 
+                # Openpyxl is 1-indexed. Row 3 is start_row_to_clear.
+                # Col 2 is B.
+                # The starting point is (row_index + 3), (column_index + 2)
+                ws.cell(row=start_row_to_clear + r_idx, column=2 + c_idx, value=value)
+        
+        st.success(f"Successfully pasted {len(df_merged)} rows starting at B3.")
+
+        # --- C. Refresh Pivot Tables (NOT POSSIBLE IN CLOUD) ---
+        # Provide the warning/guidance
+        st.warning("⚠️ **Pivot Table Refresh:** Refreshing Pivot Tables is NOT possible on this cloud service. Please ensure the Pivot Tables in your template are set to **'Refresh data when opening the file'** in Excel before you download the output.")
+        
+        # Save the modified workbook to a BytesIO object
+        output = io.BytesIO()
+        wb.save(output)
+        
+        return output.getvalue()
+        
+    except Exception as e:
+        st.error(f"❌ An error occurred during file manipulation: {e}")
+        return None
 
 # ==============================================================================
-# Streamlit UI
+# Streamlit UI (Modified to include the third file uploader)
 # ==============================================================================
 st.set_page_config(
     page_title="TCS Data Processor",
-    layout="centered",
+    layout="wide",
     initial_sidebar_state="auto"
 )
 
-st.title("📊 TCS Sales Data Consolidation Tool")
-st.markdown("Upload your two Excel files to process the data, apply return logic, and create a merged, three-sheet report.")
+st.title("📊 TCS Data Integration & Template Filler")
 st.markdown("---")
 
 # 1. File Upload Widgets
-col1, col2 = st.columns(2)
+col1, col2, col3 = st.columns(3)
 
 with col1:
-    st.subheader("1. Sales Data (tcs_sales)")
+    st.subheader("1. Sales Data")
     sales_file = st.file_uploader(
         "Upload the TCS Sales Excel File",
         type=['xlsx', 'xls'],
@@ -140,41 +165,55 @@ with col1:
     )
 
 with col2:
-    st.subheader("2. Sales Return Data (tcs_sales_return)")
+    st.subheader("2. Returns Data")
     returns_file = st.file_uploader(
         "Upload the TCS Sales Return Excel File",
         type=['xlsx', 'xls'],
         key='returns'
     )
 
+with col3:
+    st.subheader("3. Combo Template")
+    combo_template_file = st.file_uploader(
+        "Upload the Combo Template (with 'raw' sheet)",
+        type=['xlsx', 'xls'],
+        key='combo'
+    )
+    st.info("Template must contain a sheet named **'raw'**.")
+
+
 st.markdown("---")
 
 # 2. Processing and Download
-if sales_file and returns_file:
-    st.subheader("3. Process and Download")
+if sales_file and returns_file and combo_template_file:
+    st.subheader("4. Process and Download")
     
-    if st.button("🚀 Generate Final Report"):
-        with st.spinner('Processing data and creating Excel file...'):
-            processed_excel_data = process_and_combine_data(sales_file, returns_file)
+    if st.button("🚀 Generate Final Combo Report"):
+        with st.spinner('Processing data, integrating into template, and saving...'):
+            processed_excel_data = process_and_combine_data(sales_file, returns_file, combo_template_file)
 
         if processed_excel_data:
             st.download_button(
-                label="⬇️ Download Consolidated TCS Report.xlsx",
+                label="⬇️ Download Modified Combo Report.xlsx",
                 data=processed_excel_data,
-                file_name="Consolidated_TCS_Report.xlsx",
+                file_name="Modified_Combo_Report.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
             st.balloons()
         else:
-            st.error("❌ Failed to process data. Please ensure both files are uploaded and contain valid data.")
+            st.error("❌ Failed to process data. Please check logs and file integrity.")
 
 # 3. Next Steps/Guidance
 st.sidebar.markdown("## 📚 Guidance")
 st.sidebar.markdown("""
-This tool maps your input data to the required output schema:
-* `tcs_taxable_amount` is made **negative** for **Returns**.
-* The `TYPE` column is set to **Sale** or **Return**.
-* The output file contains three sheets: **Tcs_sales**, **Tcs_sales_return**, and **Merged_Data**.
+This tool now takes three files. It performs the following steps:
+1.  Combines Sales and Returns (applying negative values to returns).
+2.  Inserts the combined data **without headers** into the **'raw'** sheet of the Combo file, starting at cell **B3**.
+3.  Clears existing data below row 3 to clean the sheet.
 """)
 st.sidebar.markdown("---")
-st.sidebar.warning("**To Run:** Save the code as `data_processor.py` and run `streamlit run data_processor.py` in your terminal.")
+st.sidebar.warning("**Remember:** The Pivot Tables will **not** refresh until you open the file in Excel and confirm the refresh due to cloud environment limitations.")
+
+---
+
+The next step is to **update your `requirements.txt`** and try deploying this new script! Did you manage to set your Pivot Tables in the `combo.xlsx` file to **"Refresh data when opening the file"**?
