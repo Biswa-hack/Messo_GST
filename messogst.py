@@ -83,10 +83,8 @@ def process_zip_and_combine_data(zip_file_uploader, combo_template_file):
                 if name.endswith('.xlsx') or name.endswith('.xls'):
                     if 'return' in name.lower() or 'rtn' in name.lower():
                         returns_file_data = z.open(name)
-                        #st.info(f"Identified Returns file: {name}")
                     else:
                         sales_file_data = z.open(name)
-                        #st.info(f"Identified Sales file: {name}")
             
             if not sales_file_data or not returns_file_data:
                  st.error("❌ Could not identify both 'Sales' and 'Returns' files inside the ZIP.")
@@ -221,18 +219,3 @@ if zipped_files and combo_template_file:
 st.sidebar.markdown("## 📚 Guidance")
 st.sidebar.markdown("---")
 st.sidebar.warning("**Reminder:** The Pivot Tables will **not** refresh until you open the file in Excel and confirm the refresh due to cloud environment limitations.")
-
----
-
-### 2. Dependency Check (The Prerequisite)
-
-If the Streamlit page still doesn't load after using the clean code above, we must confirm the project dependencies.
-
-A failure to load the Streamlit page is almost always because the program cannot find a required library (like `pandas` or `openpyxl`).
-
-For successful deployment, you need a **`requirements.txt`** file in the same directory as your Python script containing these exact three lines:
-
-```text
-streamlit
-pandas
-openpyxl
