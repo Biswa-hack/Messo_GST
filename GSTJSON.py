@@ -3,7 +3,7 @@ import pandas as pd
 import io
 import zipfile
 import requests
-import json # New import for JSON handling
+import json 
 from openpyxl import load_workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 
@@ -23,7 +23,7 @@ if 'combo_result' not in st.session_state:
     st.session_state.combo_result = None
     st.session_state.b2cs_result = None
     st.session_state.hsn_result = None
-    st.session_state.json_result = None # NEW JSON STATE
+    st.session_state.json_result = None 
     st.session_state.file_name = None
     st.session_state.dynamic_gstin = "N/A" 
     st.session_state.dynamic_fp = "N/A"
@@ -87,7 +87,7 @@ STATE_MAPPING = {
 
 
 # ============================================================
-#  HELPER FUNCTIONS 
+#  HELPER FUNCTIONS (Combo Excel Generator Moved Here)
 # ============================================================
 def load_template_from_github():
     """Downloads the Excel template from the specified GitHub URL."""
@@ -126,6 +126,7 @@ def calculate_tax_components(df, supplier_state_code_numeric):
     # J_mapped starts with the state code (e.g., '27-Maharashtra'). Extract the numeric code.
     df_taxed["customer_state_code_numeric"] = df_taxed["J_mapped"].str[:2]
     
+    # Check if Place of Supply is the same as Supplier State Code (Intra-State)
     is_intra_state = df_taxed["customer_state_code_numeric"] == supplier_state_code_numeric
     
     df_taxed["gst_rate"] = pd.to_numeric(df_taxed["gst_rate"], errors='coerce').fillna(0)
@@ -140,6 +141,45 @@ def calculate_tax_components(df, supplier_state_code_numeric):
     df_taxed["Total Value"] = df_taxed["tcs_taxable_amount"] + df_taxed["Total Tax"]
     
     return df_taxed
+
+def generate_combo_excel(df_merged, template_stream):
+    """Fills the raw data into the Excel template and returns the bytes. (Fixed NameError)"""
+    
+    # template_stream is a BytesIO object, need to load workbook from it
+    wb = load_workbook(template_stream)
+    ws = wb["raw"]
+
+    # Clear old data
+    for row in range(3, ws.max_row + 1):
+        for col in range(1, 16):
+            ws.cell(row=row, column=col).value = None
+
+    start_row = 3
+    num_rows = len(df_merged)
+
+    # Insert B → I
+    write_df = df_merged[WRITE_COL_ORDER]
+    for r_idx, row in enumerate(dataframe_to_rows(write_df, index=False, header=False)):
+        for c_idx, value in enumerate(row):
+            ws.cell(start_row + r_idx, 2 + c_idx).value = value
+
+    # Insert Column A = Messo & Column J (Mapped State Code)
+    for r in range(num_rows):
+        excel_row = start_row + r
+        ws.cell(excel_row, 1).value = "Messo"
+        ws.cell(excel_row, 10).value = df_merged.loc[r, "J_mapped"]
+
+        # Insert formulas K–O (Assuming $X$22 in the template holds the full state code string)
+        ws.cell(excel_row, 11).value = f"=IF(J{excel_row}=$X$22,F{excel_row}*E{excel_row}/100/2,0)"
+        ws.cell(excel_row, 12).value = f"=IF(J{excel_row}=$X$22,F{excel_row}*E{excel_row}/100/2,0)"
+        ws.cell(excel_row, 13).value = f"=IF(J{excel_row}<>$X$22,F{excel_row}*E{excel_row}/100,0)"
+        ws.cell(excel_row, 14).value = f"=K{excel_row}+L{excel_row}+M{excel_row}+F{excel_row}"
+        ws.cell(excel_row, 15).value = f"=(K{excel_row}+L{excel_row}+M{excel_row})/F{excel_row}" 
+
+    template_output = io.BytesIO()
+    wb.save(template_output)
+    return template_output.getvalue()
+
 
 # ============================================================
 #  SUMMARY GENERATION FUNCTIONS
@@ -168,12 +208,12 @@ def generate_b2cs_csv(df_merged_taxed):
     return csv_output
 
 def generate_hsn_summary(df_merged_taxed):
-    """Generates the GSTR-1 HSN Summary (Table 12) in Excel format."""
+    """Generates the GSTR-1 HSN Summary (Table 12) in CSV format. (Updated to CSV)"""
 
     summary_df = df_merged_taxed.groupby(["hsn_code", "gst_rate"]).agg(
         Total_Quantity=('QTY', 'sum'),
-        Total_Taxable_Value=('tcs_taxable_amount', 'sum'),
         Total_Value=('Total Value', 'sum'),
+        Total_Taxable_Value=('tcs_taxable_amount', 'sum'),
         Integrated_Tax_Amount=('IGST', 'sum'),
         Central_Tax_Amount=('CGST', 'sum'),
         State_UT_Tax_Amount=('SGST', 'sum')
@@ -198,9 +238,9 @@ def generate_hsn_summary(df_merged_taxed):
         'gst_rate': 'Rate'
     })
     
-    excel_output = io.BytesIO()
-    final_hsn_df.to_excel(excel_output, index=False, sheet_name='HSN_Summary')
-    return excel_output.getvalue()
+    # Convert to CSV
+    csv_output = final_hsn_df.to_csv(index=False).encode('utf-8')
+    return csv_output
 
 
 def generate_gstr1_json(df_merged_taxed, dynamic_gstin, dynamic_fp):
@@ -216,22 +256,23 @@ def generate_gstr1_json(df_merged_taxed, dynamic_gstin, dynamic_fp):
         
         pos_code_only = pos_name[:2] # State Code from 'XX-State Name'
         
-        # Aggregate tax amounts for the JSON nested structure
         group_txval = group['tcs_taxable_amount'].sum()
         group_iamt = group['IGST'].sum()
         group_camt = group['CGST'].sum()
         group_samt = group['SGST'].sum()
         
+        # Skip if Taxable Value is close to zero
+        if abs(group_txval) < 0.005: continue
+            
         data_entry = {
             "txval": round(group_txval, 2),
             "rt": int(rate),
             "iamt": round(group_iamt, 2),
             "camt": round(group_camt, 2),
             "samt": round(group_samt, 2),
-            "csamt": 0.0 # Cess is always 0 in this flow, based on input columns
+            "csamt": 0.0
         }
 
-        # B2CS entry for this POS
         b2cs_entry = {
             "pos": pos_code_only,
             "sftr": "OE", # Other than E-Commerce
@@ -252,11 +293,11 @@ def generate_gstr1_json(df_merged_taxed, dynamic_gstin, dynamic_fp):
     hsn_data_list = []
     for index, row in hsn_grouped.iterrows():
         # Ensure HSN and Rate are valid before adding
-        if row['hsn_code'] and row['gst_rate'] > 0:
+        if pd.notna(row['hsn_code']) and row['hsn_code'] and row['gst_rate'] > 0:
             hsn_entry = {
                 "num": index + 1,
-                "hsn_sc": str(int(row['hsn_code'])) if pd.notna(row['hsn_code']) else "",
-                "desc": "", # Description not available in this merged data, keep blank
+                "hsn_sc": str(int(row['hsn_code'])),
+                "desc": "",
                 "uqc": "NOS",
                 "qty": round(row['qty'], 3),
                 "val": round(row['val'], 2),
@@ -283,12 +324,11 @@ def generate_gstr1_json(df_merged_taxed, dynamic_gstin, dynamic_fp):
         }
     }
     
-    # Return JSON as a string buffer
     return json.dumps(gstr1_json_output, indent=4).encode('utf-8')
 
 
 # ============================================================
-#  MAIN ZIP PROCESSOR (Refactored to include JSON)
+#  MAIN ZIP PROCESSOR
 # ============================================================
 def process_zip_and_combine_data(zip_file):
     """Extracts, processes, merges data, fills the Excel template, and generates summaries/JSON."""
@@ -341,7 +381,7 @@ def process_zip_and_combine_data(zip_file):
         
         dynamic_fp = f"{month_str}{year_str}"
         dynamic_filename = f"{dynamic_gstin}_{month_str}_{year_str}_GSTR1.xlsx"
-        default_state_code_numeric = dynamic_gstin[:2] # **INTRA-STATE LOGIC SOURCE**
+        default_state_code_numeric = dynamic_gstin[:2]
         
     except Exception as e:
         st.error(f"❌ Error extracting header data from Sales file (C2, P2, O2): {e}")
@@ -361,65 +401,32 @@ def process_zip_and_combine_data(zip_file):
     df_merged["end_customer_state_new"] = df_merged["end_customer_state_new"].str.title()
     df_merged["J_mapped"] = df_merged["end_customer_state_new"].map(STATE_MAPPING).fillna("")
 
-    # 3. Calculate Tax Components (using the dynamically extracted state code)
+    # 3. Calculate Tax Components 
     df_merged_taxed = calculate_tax_components(df_merged.copy(), default_state_code_numeric) 
 
-    # 4. Generate All Reports
-    combo_excel_output = generate_combo_excel(df_merged, template_stream, dynamic_gstin, default_state_code_numeric)
-    b2cs_csv_output = generate_b2cs_csv(df_merged_taxed)
-    hsn_excel_output = generate_hsn_summary(df_merged_taxed)
-    json_output = generate_gstr1_json(df_merged_taxed, dynamic_gstin, dynamic_fp) # NEW
+    # 4. Load Template (for Excel output only, need a new stream for the function)
+    template_stream = load_template_from_github()
+    if template_stream is None:
+        return False
 
-    # 5. Save outputs to session state
+    # 5. Generate All Reports
+    # Note: generate_combo_excel expects the BytesIO object, not the bytes itself
+    combo_excel_output = generate_combo_excel(df_merged, template_stream) 
+    b2cs_csv_output = generate_b2cs_csv(df_merged_taxed)
+    hsn_csv_output = generate_hsn_summary(df_merged_taxed) # Changed to CSV
+    json_output = generate_gstr1_json(df_merged_taxed, dynamic_gstin, dynamic_fp) 
+
+    # 6. Save outputs to session state
     st.session_state.combo_result = combo_excel_output
     st.session_state.b2cs_result = b2cs_csv_output
-    st.session_state.hsn_result = hsn_excel_output
-    st.session_state.json_result = json_output # SAVE NEW JSON RESULT
+    st.session_state.hsn_result = hsn_csv_output # Save CSV result
+    st.session_state.json_result = json_output
     st.session_state.file_name = dynamic_filename
     st.session_state.dynamic_gstin = dynamic_gstin
     st.session_state.dynamic_fp = dynamic_fp
     st.session_state.default_state_code_numeric = default_state_code_numeric
     
     return True
-
-def generate_combo_excel(df_merged, template_stream, dynamic_gstin, default_state_code_numeric):
-    """Fills the raw data into the Excel template and returns the bytes."""
-    
-    wb = load_workbook(io.BytesIO(template_stream.getvalue())) # Re-read stream
-    ws = wb["raw"]
-
-    # Clear old data
-    for row in range(3, ws.max_row + 1):
-        for col in range(1, 16):
-            ws.cell(row=row, column=col).value = None
-
-    start_row = 3
-    num_rows = len(df_merged)
-
-    # Insert B → I
-    write_df = df_merged[WRITE_COL_ORDER]
-    for r_idx, row in enumerate(dataframe_to_rows(write_df, index=False, header=False)):
-        for c_idx, value in enumerate(row):
-            ws.cell(start_row + r_idx, 2 + c_idx).value = value
-
-    # Insert Column A = Messo & Column J (Mapped State Code)
-    for r in range(num_rows):
-        excel_row = start_row + r
-        ws.cell(excel_row, 1).value = "Messo"
-        ws.cell(excel_row, 10).value = df_merged.loc[r, "J_mapped"]
-
-        # Insert formulas K–O (Assuming $X$22 in the template holds the full state code string)
-        # Note: This formula set relies on $X$22 containing the expected 'XX-State Name' string, 
-        # which is a common pattern in GSTR-1 templates.
-        ws.cell(excel_row, 11).value = f"=IF(J{excel_row}=$X$22,F{excel_row}*E{excel_row}/100/2,0)"
-        ws.cell(excel_row, 12).value = f"=IF(J{excel_row}=$X$22,F{excel_row}*E{excel_row}/100/2,0)"
-        ws.cell(excel_row, 13).value = f"=IF(J{excel_row}<>$X$22,F{excel_row}*E{excel_row}/100,0)"
-        ws.cell(excel_row, 14).value = f"=K{excel_row}+L{excel_row}+M{excel_row}+F{excel_row}"
-        ws.cell(excel_row, 15).value = f"=(K{excel_row}+L{excel_row}+M{excel_row})/F{excel_row}" 
-
-    template_output = io.BytesIO()
-    wb.save(template_output)
-    return template_output.getvalue()
 
 
 # ============================================================
@@ -452,7 +459,7 @@ zipped_files = st.file_uploader("Upload ZIP containing Sales + Return files", ty
 # Process button
 if zipped_files:
     if st.button("🚀 Generate All 4 Reports", type="primary"):
-        with st.spinner("Processing... Generating Combo, B2CS Summary (CSV), HSN Summary (Excel), and GSTR-1 JSON."):
+        with st.spinner("Processing... Generating Combo, B2CS Summary (CSV), HSN Summary (CSV), and GSTR-1 JSON."):
             success = process_zip_and_combine_data(zipped_files)
 
         if success:
@@ -477,7 +484,7 @@ if st.session_state.combo_result and st.session_state.b2cs_result and st.session
         )
     
     with col2:
-        st.markdown("#### 2. B2CS Summary (GSTR-1 Table 7)")
+        st.markdown("#### 2. B2CS Summary (CSV)")
         st.download_button(
             "⬇ B2CS Summary (.csv)",
             st.session_state.b2cs_result,
@@ -486,12 +493,12 @@ if st.session_state.combo_result and st.session_state.b2cs_result and st.session
         )
 
     with col3:
-        st.markdown("#### 3. HSN Summary (GSTR-1 Table 12)")
+        st.markdown("#### 3. HSN Summary (CSV)")
         st.download_button(
-            "⬇ HSN Summary (.xlsx)",
+            "⬇ HSN Summary (.csv)",
             st.session_state.hsn_result,
-            "HSN_Summary_Report.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            "HSN_Summary_Report.csv",
+            mime="text/csv"
         )
 
     with col4:
