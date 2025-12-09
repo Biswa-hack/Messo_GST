@@ -87,7 +87,7 @@ STATE_MAPPING = {
 
 
 # ============================================================
-#  HELPER FUNCTIONS (Combo Excel Generator Moved Here)
+#  HELPER FUNCTIONS (All placed before MAIN processor)
 # ============================================================
 def load_template_from_github():
     """Downloads the Excel template from the specified GitHub URL."""
@@ -102,12 +102,14 @@ def process_file(file_data, data_type):
     df = pd.read_excel(file_data)
     df_processed = df.rename(columns=COLUMN_MAPPING)
 
+    # Filter and create the final DataFrame with required columns
     df_final = df_processed[list(COLUMN_MAPPING.values())].copy()
     df_final["TYPE"] = data_type
 
     df_final["tcs_taxable_amount"] = pd.to_numeric(df_final["tcs_taxable_amount"], errors="coerce")
     df_final["QTY"] = pd.to_numeric(df_final["QTY"], errors="coerce")
 
+    # Apply sign convention based on data type
     if data_type == "Return":
         df_final["tcs_taxable_amount"] = df_final["tcs_taxable_amount"].abs() * -1
         df_final["QTY"] = df_final["QTY"].abs() * -1
@@ -143,7 +145,7 @@ def calculate_tax_components(df, supplier_state_code_numeric):
     return df_taxed
 
 def generate_combo_excel(df_merged, template_stream):
-    """Fills the raw data into the Excel template and returns the bytes. (Fixed NameError)"""
+    """Fills the raw data into the Excel template and returns the bytes."""
     
     # template_stream is a BytesIO object, need to load workbook from it
     wb = load_workbook(template_stream)
@@ -156,6 +158,11 @@ def generate_combo_excel(df_merged, template_stream):
 
     start_row = 3
     num_rows = len(df_merged)
+    if num_rows == 0:
+        # If no data, return empty excel content (optional, but safe)
+        template_output = io.BytesIO()
+        wb.save(template_output)
+        return template_output.getvalue()
 
     # Insert B → I
     write_df = df_merged[WRITE_COL_ORDER]
@@ -208,7 +215,7 @@ def generate_b2cs_csv(df_merged_taxed):
     return csv_output
 
 def generate_hsn_summary(df_merged_taxed):
-    """Generates the GSTR-1 HSN Summary (Table 12) in CSV format. (Updated to CSV)"""
+    """Generates the GSTR-1 HSN Summary (Table 12) in CSV format."""
 
     summary_df = df_merged_taxed.groupby(["hsn_code", "gst_rate"]).agg(
         Total_Quantity=('QTY', 'sum'),
@@ -261,7 +268,7 @@ def generate_gstr1_json(df_merged_taxed, dynamic_gstin, dynamic_fp):
         group_camt = group['CGST'].sum()
         group_samt = group['SGST'].sum()
         
-        # Skip if Taxable Value is close to zero
+        # Skip if Taxable Value is close to zero (e.g., if only Return file was present and it zeroed out Sales)
         if abs(group_txval) < 0.005: continue
             
         data_entry = {
@@ -331,7 +338,10 @@ def generate_gstr1_json(df_merged_taxed, dynamic_gstin, dynamic_fp):
 #  MAIN ZIP PROCESSOR
 # ============================================================
 def process_zip_and_combine_data(zip_file):
-    """Extracts, processes, merges data, fills the Excel template, and generates summaries/JSON."""
+    """
+    Extracts, processes, merges data, fills the Excel template, and generates reports.
+    Sales file is mandatory for configuration; Return file is optional.
+    """
     sales_data_bytes = None
     return_data_bytes = None
 
@@ -348,12 +358,12 @@ def process_zip_and_combine_data(zip_file):
         st.error("❌ Invalid or corrupted ZIP file.")
         return False
         
-    if not sales_data_bytes or not return_data_bytes:
-        st.error("❌ ZIP must contain both a **Sales** and a **Return** file.")
+    # **NEW LOGIC: Sales file is mandatory for configuration (GSTIN/FP)**
+    if not sales_data_bytes:
+        st.error("❌ The **Sales file** is mandatory as it contains the required configuration data (GSTIN in C2, Month/Year in P2/O2) needed for processing and file naming.")
         return False
 
     sales_data_stream = io.BytesIO(sales_data_bytes)
-    return_data_stream = io.BytesIO(return_data_bytes)
 
     # 1a. Extract GSTIN and Reporting Period (C2, P2, O2)
     try:
@@ -364,7 +374,7 @@ def process_zip_and_combine_data(zip_file):
         reporting_month = ws_sales['P2'].value
         reporting_year = ws_sales['O2'].value
 
-        sales_data_stream.seek(0)
+        sales_data_stream.seek(0) # Reset stream pointer for pandas processing below
         
         if not (dynamic_gstin and len(dynamic_gstin) == 15):
              st.error("❌ GSTIN in C2 is invalid or missing.")
@@ -387,39 +397,49 @@ def process_zip_and_combine_data(zip_file):
         st.error(f"❌ Error extracting header data from Sales file (C2, P2, O2): {e}")
         return False
 
-    # 2. Process and Merge DataFrames
+    # 2. Process DataFrames
     try:
         df_sales = process_file(sales_data_stream, "Sale") 
-        df_returns = process_file(return_data_stream, "Return") 
+        
+        # **NEW LOGIC: Handle optional Returns file**
+        if return_data_bytes:
+            return_data_stream = io.BytesIO(return_data_bytes)
+            df_returns = process_file(return_data_stream, "Return") 
+        else:
+            st.warning("⚠️ Return file not found in ZIP. Processing Sales data only.")
+            # Create an empty DataFrame with the expected structure for safe concatenation
+            expected_cols = list(COLUMN_MAPPING.values()) + ["TYPE"]
+            df_returns = pd.DataFrame(columns=expected_cols)
+
     except Exception as e:
         st.error(f"❌ Error processing input files: {e}")
         return False
         
+    # 3. Merge DataFrames
     df_merged = pd.concat([df_sales, df_returns], ignore_index=True)
 
     # Map State Code
     df_merged["end_customer_state_new"] = df_merged["end_customer_state_new"].str.title()
     df_merged["J_mapped"] = df_merged["end_customer_state_new"].map(STATE_MAPPING).fillna("")
 
-    # 3. Calculate Tax Components 
+    # 4. Calculate Tax Components 
     df_merged_taxed = calculate_tax_components(df_merged.copy(), default_state_code_numeric) 
 
-    # 4. Load Template (for Excel output only, need a new stream for the function)
+    # 5. Load Template (for Excel output only)
     template_stream = load_template_from_github()
     if template_stream is None:
         return False
 
-    # 5. Generate All Reports
-    # Note: generate_combo_excel expects the BytesIO object, not the bytes itself
+    # 6. Generate All Reports
     combo_excel_output = generate_combo_excel(df_merged, template_stream) 
     b2cs_csv_output = generate_b2cs_csv(df_merged_taxed)
-    hsn_csv_output = generate_hsn_summary(df_merged_taxed) # Changed to CSV
+    hsn_csv_output = generate_hsn_summary(df_merged_taxed)
     json_output = generate_gstr1_json(df_merged_taxed, dynamic_gstin, dynamic_fp) 
 
-    # 6. Save outputs to session state
+    # 7. Save outputs to session state
     st.session_state.combo_result = combo_excel_output
     st.session_state.b2cs_result = b2cs_csv_output
-    st.session_state.hsn_result = hsn_csv_output # Save CSV result
+    st.session_state.hsn_result = hsn_csv_output
     st.session_state.json_result = json_output
     st.session_state.file_name = dynamic_filename
     st.session_state.dynamic_gstin = dynamic_gstin
@@ -452,7 +472,7 @@ st.markdown("---")
 st.markdown("### 📤 File Upload")
 
 # Clear session state if a new file is uploaded
-zipped_files = st.file_uploader("Upload ZIP containing Sales + Return files", type=["zip"], on_change=lambda: [
+zipped_files = st.file_uploader("Upload ZIP containing Sales (Mandatory) + Return (Optional) files", type=["zip"], on_change=lambda: [
     st.session_state.update(combo_result=None, b2cs_result=None, hsn_result=None, json_result=None, file_name=None)
 ])
 
