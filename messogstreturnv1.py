@@ -14,7 +14,7 @@ GITHUB_TEMPLATE_URL = "https://raw.githubusercontent.com/Biswa-hack/Messo_GST/ma
 DEFAULT_SUPPLIER_STATE_CODE = "27-Maharashtra" 
 
 # ============================================================
-#  COLUMN MAPPING
+#  COLUMN MAPPING & ORDER
 # ============================================================
 COLUMN_MAPPING = {
     'order_date': 'order_date',
@@ -26,9 +26,6 @@ COLUMN_MAPPING = {
     'quantity': 'QTY'
 }
 
-# ============================================================
-#  OUTPUT COLUMN ORDER (B → I)
-# ============================================================
 WRITE_COL_ORDER = [
     'order_date',             # B
     'order_num',              # C
@@ -73,7 +70,7 @@ STATE_MAPPING = {
 }
 
 # ============================================================
-#  HELPER FUNCTIONS
+#  HELPER FUNCTIONS (including the missing 'process_file')
 # ============================================================
 def load_template_from_github():
     """Downloads the Excel template from the specified GitHub URL."""
@@ -83,18 +80,40 @@ def load_template_from_github():
         return None
     return io.BytesIO(r.content)
 
+def process_file(file_data, data_type):
+    """
+    Reads Excel, renames columns, and adjusts values for Sales/Return. 
+    This is the function that caused the NameError if it wasn't defined first.
+    """
+    df = pd.read_excel(file_data)
+    df_processed = df.rename(columns=COLUMN_MAPPING)
+
+    df_final = df_processed[list(COLUMN_MAPPING.values())].copy()
+    df_final["TYPE"] = data_type
+
+    df_final["tcs_taxable_amount"] = pd.to_numeric(df_final["tcs_taxable_amount"], errors="coerce")
+    df_final["QTY"] = pd.to_numeric(df_final["QTY"], errors="coerce")
+
+    if data_type == "Return":
+        # Returns should be negative (Taxable Value for returns is negative)
+        df_final["tcs_taxable_amount"] = df_final["tcs_taxable_amount"].abs() * -1
+        df_final["QTY"] = df_final["QTY"].abs() * -1
+    else:
+        # Sales should be positive (Taxable Value for sales is positive)
+        df_final["tcs_taxable_amount"] = df_final["tcs_taxable_amount"].abs()
+        df_final["QTY"] = df_final["QTY"].abs()
+
+    return df_final
+
 def calculate_tax_components(df):
     """
     Calculates CGST, SGST, IGST, and Total Tax for the DataFrame based on 
     the Place of Supply (J_mapped) vs. the DEFAULT_SUPPLIER_STATE_CODE.
     """
-    # Create a copy to perform calculations without warning
     df_taxed = df.copy() 
     
     is_intra_state = df_taxed["J_mapped"] == DEFAULT_SUPPLIER_STATE_CODE
     
-    # Calculate Total Tax Amount (IGST Rate = GST Rate)
-    # Handle division by zero/invalid rate by coercing to numeric and filling NaN
     df_taxed["gst_rate"] = pd.to_numeric(df_taxed["gst_rate"], errors='coerce').fillna(0)
     
     total_tax_rate = df_taxed["gst_rate"] / 100
@@ -213,14 +232,16 @@ def process_zip_and_combine_data(zip_file):
         return None, None, None
         
     if not sales_data or not return_data:
-        st.error("❌ ZIP must contain both a **Sales** and a **Return** file.")
+        st.error("❌ ZIP must contain both a **Sales** and a **Return** file (filenames must contain key identifying words like 'sale' and 'return').")
         return None, None, None
 
     # 2. Process and Merge DataFrames
     try:
-        df_sales = process_file(sales_data, "Sale")
-        df_returns = process_file(return_data, "Return")
+        # Calls the 'process_file' function (which is defined above)
+        df_sales = process_file(sales_data, "Sale") 
+        df_returns = process_file(return_data, "Return") 
     except Exception as e:
+        # This is where the error was caught. It should be resolved now.
         st.error(f"❌ Error processing input files: {e}")
         return None, None, None
         
@@ -273,7 +294,6 @@ def process_zip_and_combine_data(zip_file):
     # Insert formulas K–O
     for r in range(num_rows):
         excel_row = start_row + r
-        # NOTE: $X$22 is assumed to contain the default supplier state code in the template
         # K: CGST 
         ws.cell(excel_row, 11).value = f"=IF(J{excel_row}=$X$22,F{excel_row}*E{excel_row}/100/2,0)"
         # L: SGST 
@@ -282,8 +302,8 @@ def process_zip_and_combine_data(zip_file):
         ws.cell(excel_row, 13).value = f"=IF(J{excel_row}<>$X$22,F{excel_row}*E{excel_row}/100,0)"
         # N: Total Value
         ws.cell(excel_row, 14).value = f"=K{excel_row}+L{excel_row}+M{excel_row}+F{excel_row}"
-        # O: % GST
-        ws.cell(excel_row, 15).value = f"=(K{excel_row}+L{excel_row}+M{excel_excel_row})/F{excel_row}" # Note: corrected typo on L1
+        # O: % GST (Fixed typo: using 'excel_row' now)
+        ws.cell(excel_row, 15).value = f"=(K{excel_row}+L{excel_row}+M{excel_row})/F{excel_row}" 
 
     template_output = io.BytesIO()
     wb.save(template_output)
@@ -297,7 +317,7 @@ def process_zip_and_combine_data(zip_file):
 st.set_page_config(page_title="TCS Processor V2.1", layout="wide")
 st.title("📊 TCS Data Integration & GSTR-1 Summary Generator")
 st.markdown("---")
-st.info(f"**Default Supplier State Code (for CGST/SGST determination):** `{DEFAULT_SUPPLIER_STATE_CODE}`. Update the constant in the code if needed.")
+st.info(f"**Default Supplier State Code (for CGST/SGST determination):** `{DEFAULT_SUPPLIER_STATE_CODE}`. This is assumed to be the value in cell **X22** of the Excel template.")
 st.markdown("---")
 
 zipped_files = st.file_uploader("Upload ZIP containing Sales + Return files", type=["zip"])
