@@ -8,10 +8,10 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 
 
 # ====================================================================
-#  GITHUB TEMPLATE URL (REPLACE with your actual repo path)
+#  GITHUB TEMPLATE URL (UPDATED)
 # ====================================================================
 GITHUB_TEMPLATE_URL = (
-    "https://github.com/<USERNAME>/<REPO>/raw/main/Messo_GST/MESSO GST Template.xlsx"
+    "https://raw.githubusercontent.com/Biswa-hack/Messo_GST/main/MESSO%20GST%20Template.xlsx"
 )
 
 
