@@ -188,7 +188,7 @@ def generate_hsn_summary(df_merged_taxed):
     ).reset_index()
 
     summary_df['Description'] = '' 
-    summary_df['UQC'] = 'NOS' 
+    summary_df['UQC'] = 'NOS-NUMBERS' 
     summary_df['Cess Amount'] = 0.0
 
     final_hsn_df = summary_df[[
