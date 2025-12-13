@@ -153,14 +153,13 @@ def generate_combo_excel(df_merged, template_stream):
     wb = load_workbook(template_stream)
     ws = wb["raw"]
 
-    # Clear old data
-    # Note: Clearing only max 1000 rows for safety/performance, adjust if needed
+    # Clear old data (clear up to 1000 rows for safety/performance)
     for row in range(3, 1003): 
         for col in range(1, 16):
             if ws.cell(row=row, column=col).value is not None:
                 ws.cell(row=row, column=col).value = None
             else:
-                break # Stop clearing when first empty row is found
+                break 
 
     start_row = 3
     num_rows = len(df_merged)
@@ -168,30 +167,46 @@ def generate_combo_excel(df_merged, template_stream):
     template_output = io.BytesIO()
     
     if num_rows == 0:
-        # If no data, return empty excel content (optional, but safe)
+        # If no data, return empty excel content
         wb.save(template_output)
         return template_output.getvalue()
 
-    # Insert B → I
-    # Use iloc for safer access after filtering/concat
-    write_df = df_merged[WRITE_COL_ORDER].reset_index(drop=True) 
+    # 1. Prepare DataFrame for insertion
+    # Ensure all required columns exist and reset index for safe positional access
+    required_cols = WRITE_COL_ORDER + ["J_mapped"]
+    write_df = df_merged.copy()
     
-    for r_idx, row in enumerate(dataframe_to_rows(write_df, index=False, header=False)):
-        if r_idx < num_rows: # Safety check
+    # Check if any required column is missing before proceeding
+    missing_cols = [col for col in required_cols if col not in write_df.columns]
+    if missing_cols:
+        st.error(f"❌ Internal Error: Missing columns {missing_cols} needed for Excel generation.")
+        return template_output.getvalue() # Return empty content
+
+    write_df = write_df[required_cols].reset_index(drop=True)
+    
+    # Extract the mapped states separately for column J insertion
+    mapped_states = write_df["J_mapped"]
+    
+    # Insert B → I
+    data_for_b_to_i = write_df[WRITE_COL_ORDER]
+    
+    for r_idx, row in enumerate(dataframe_to_rows(data_for_b_to_i, index=False, header=False)):
+        if r_idx < num_rows: 
             for c_idx, value in enumerate(row):
+                # Columns B (2) through I (9)
                 ws.cell(start_row + r_idx, 2 + c_idx).value = value
 
-    # Insert Column A = Messo & Column J (Mapped State Code)
+    # 2. Insert Column A = Messo & Column J (Mapped State Code)
     for r in range(num_rows):
         excel_row = start_row + r
-        # Access mapped state using loc on the re-indexed df
-        mapped_state = write_df.loc[r, df_merged.columns.get_loc("J_mapped")] 
+        
+        # Access mapped state directly from the extracted Series/Column
+        mapped_state = mapped_states.loc[r]
         
         ws.cell(excel_row, 1).value = "Messo"
-        ws.cell(excel_row, 10).value = mapped_state
+        ws.cell(excel_row, 10).value = mapped_state # Column J
 
-        # Insert formulas K–O (Assuming $X$22 in the template holds the full state code string)
-        # These formulas rely on values written to F (taxable value) and E (rate)
+        # 3. Insert formulas K–O (Assuming $X$22 in the template holds the full state code string)
         ws.cell(excel_row, 11).value = f'=IF(J{excel_row}=$X$22,F{excel_row}*E{excel_row}/100/2,0)'
         ws.cell(excel_row, 12).value = f'=IF(J{excel_row}=$X$22,F{excel_row}*E{excel_row}/100/2,0)'
         ws.cell(excel_row, 13).value = f'=IF(J{excel_row}<>$X$22,F{excel_row}*E{excel_row}/100,0)'
