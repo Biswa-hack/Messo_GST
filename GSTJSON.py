@@ -227,7 +227,7 @@ def generate_hsn_summary(df_merged_taxed):
     ).reset_index()
 
     summary_df['Description'] = '' 
-    summary_df['UQC'] = 'NOS' 
+    summary_df['UQC'] = 'NOS-NUMBERS' 
     summary_df['Cess Amount'] = 0.0
 
     final_hsn_df = summary_df[[
@@ -305,7 +305,7 @@ def generate_gstr1_json(df_merged_taxed, dynamic_gstin, dynamic_fp):
                 "num": index + 1,
                 "hsn_sc": str(int(row['hsn_code'])),
                 "desc": "",
-                "uqc": "NOS",
+                "uqc": "NOS-NUMBERS",
                 "qty": round(row['qty'], 3),
                 "val": round(row['val'], 2),
                 "txval": round(row['txval'], 2),
