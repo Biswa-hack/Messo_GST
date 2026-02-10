@@ -82,7 +82,11 @@ STATE_MAPPING = {
     "Andaman And Nicobar Islands": "35-Andaman & Nicobar Islands",
     "Andaman & Nicobar Islands": "35-Andaman & Nicobar Islands",
     "Telangana": "36-Telangana", "Andhra Pradesh": "37-Andhra Pradesh",
-    "Ladakh": "38-Ladakh", "Other Territory": "97-Other Territory"
+    "Ladakh": "38-Ladakh", "Other Territory": "97-Other Territory",
+    "Orissa": "21-Odisha",
+  "ORISSA": "21-Odisha",
+  "Andaman & Nicobar": "35-Andaman & Nicobar Islands",
+  "ANDAMAN & NICOBAR": "35-Andaman & Nicobar Islands"
 }
 
 
@@ -341,7 +345,7 @@ def generate_gstr1_json(df_merged_taxed, dynamic_gstin, dynamic_fp, supplier_sta
                 "num": num_counter,
                 "hsn_sc": str(int(row['hsn_code'])),
                 "desc": "", 
-                "uqc": "NOS", # Changed from 'NOS-NUMBERS' to 'NOS' to match working sample
+                "uqc": "NOS-NUMBERS", # Changed from 'NOS-NUMBERS' to 'NOS' to match working sample
                 "qty": round(row['qty'], 3),
                 # Removed 'val' (Total Value) as per working sample
                 "txval": round(row['txval'], 2),
