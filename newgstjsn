@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import io, zipfile, json
-from openpyxl import load_workbook
 
 # ============================================================
 # PAGE CONFIG
@@ -9,7 +8,7 @@ from openpyxl import load_workbook
 st.set_page_config(page_title="GSTR-1 JSON Generator", layout="wide")
 
 # ============================================================
-# FULL STATE MAPPING (ALL 36 CODES)
+# FULL STATE MAPPING (Portal Validated)
 # ============================================================
 STATE_MAPPING = {
     "JAMMU AND KASHMIR": "01", "HIMACHAL PRADESH": "02", "PUNJAB": "03",
@@ -24,80 +23,58 @@ STATE_MAPPING = {
     "DAMAN AND DIU": "26", "DADRA AND NAGAR HAVELI": "26",
     "MAHARASHTRA": "27", "KARNATAKA": "29", "GOA": "30",
     "LAKSHADWEEP": "31", "KERALA": "32", "TAMIL NADU": "33",
-    "PUDUCHERRY": "34", "PONDICHERRY": "34", "ANDAMAN AND NICOBAR ISLANDS": "35",
-    "TELANGANA": "36", "ANDHRA PRADESH": "37", "LADAKH": "38"
+    "PUDUCHERRY": "34", "PONDICHERRY": "34", "ANDAMAN & NICOBAR": "35",
+    "ANDAMAN AND NICOBAR ISLANDS": "35", "TELANGANA": "36", 
+    "ANDHRA PRADESH": "37", "LADAKH": "38"
 }
 
 # ============================================================
-# HELPERS
+# DATA PROCESSING ENGINE
 # ============================================================
-def process_file(file, file_type):
-    df = pd.read_excel(file)
+def process_data(df, file_type, supplier_state_code):
+    # Mapping based on your provided file structure
     df = df.rename(columns={
-        "hsn_code": "hsn", "gst_rate": "rate",
-        "total_taxable_sale_value": "txval", "quantity": "qty",
+        "hsn_code": "hsn", 
+        "gst_rate": "rate",
+        "total_taxable_sale_value": "txval", 
+        "quantity": "qty",
         "end_customer_state_new": "state"
     })
+    
+    # Numeric conversion
     df["txval"] = pd.to_numeric(df["txval"], errors="coerce").fillna(0)
     df["qty"] = pd.to_numeric(df["qty"], errors="coerce").fillna(0)
     
+    # Handle Returns (negative values)
     if file_type == "RETURN":
         df["txval"] *= -1
         df["qty"] *= -1
 
+    # State Code Mapping
     df["state_clean"] = df["state"].astype(str).str.strip().str.upper()
     df["pos"] = df["state_clean"].map(STATE_MAPPING).fillna("")
-    return df
-
-def calculate_tax(df, supplier_state_code):
+    
+    # Tax Calculation
     intra = df["pos"].astype(str) == str(supplier_state_code)
     tax = df["txval"] * df["rate"] / 100
     df["igst"] = tax.where(~intra, 0)
     df["cgst"] = tax.where(intra, 0) / 2
     df["sgst"] = tax.where(intra, 0) / 2
+    
     return df
 
-# ============================================================
-# ✅ FINAL VALIDATED JSON GENERATOR
-# ============================================================
 def generate_gstr1_json(df, gstin, fp, supplier_state_code):
-    # -------------------- B2CS --------------------
+    # -------------------- B2CS SECTION --------------------
     b2cs = []
     for (pos, rate), g in df.groupby(["pos", "rate"]):
         txval = round(g["txval"].sum(), 2)
         if abs(txval) < 0.01 or pos == "": continue
 
-        is_intra = str(pos) == str(supplier_state_code)
-        
-        # Build entry with ONLY relevant tax keys
-        entry = {
-            "sply_ty": "INTRA" if is_intra else "INTER",
-            "rt": int(rate),
+        b2cs.append({
+            "sply_ty": "INTRA" if str(pos) == str(supplier_state_code) else "INTER",
+            "rt": float(rate),
             "typ": "OE",
             "pos": str(pos),
-            "txval": txval,
-            "csamt": 0.0
-        }
-        if is_intra:
-            entry["camt"] = round(g["cgst"].sum(), 2)
-            entry["samt"] = round(g["sgst"].sum(), 2)
-        else:
-            entry["iamt"] = round(g["igst"].sum(), 2)
-        b2cs.append(entry)
-
-    # -------------------- HSN --------------------
-    hsn_items = []
-    for i, ((hsn_code, rate), g) in enumerate(df.groupby(["hsn", "rate"]), 1):
-        txval = round(g["txval"].sum(), 2)
-        if abs(txval) < 0.01: continue
-
-        hsn_items.append({
-            "num": i,
-            "hsn_sc": str(int(float(hsn_code))), # Forces "6204" instead of "6204.0"
-            "desc": "CLOTHING",
-            "uqc": "NOS-NUMBERS",
-            "qty": round(g["qty"].sum(), 2),
-            "rt": int(rate),
             "txval": txval,
             "iamt": round(g["igst"].sum(), 2),
             "camt": round(g["cgst"].sum(), 2),
@@ -105,7 +82,27 @@ def generate_gstr1_json(df, gstin, fp, supplier_state_code):
             "csamt": 0.0
         })
 
-    final_json = {
+    # -------------------- HSN SECTION --------------------
+    hsn_items = []
+    for i, ((hsn_code, rate), g) in enumerate(df.groupby(["hsn", "rate"]), 1):
+        txval = round(g["txval"].sum(), 2)
+        if abs(txval) < 0.01: continue
+
+        hsn_items.append({
+            "num": i,
+            "hsn_sc": str(int(float(hsn_code))), 
+            "desc": "GOODS",
+            "uqc": "NOS-NUMBERS",
+            "qty": round(g["qty"].sum(), 2),
+            "rt": float(rate),
+            "txval": txval,
+            "iamt": round(g["igst"].sum(), 2),
+            "camt": round(g["cgst"].sum(), 2),
+            "samt": round(g["sgst"].sum(), 2),
+            "csamt": 0.0
+        })
+
+    return {
         "gstin": str(gstin).strip().upper(),
         "fp": str(fp),
         "version": "GST3.2.3",
@@ -113,35 +110,47 @@ def generate_gstr1_json(df, gstin, fp, supplier_state_code):
         "b2cs": b2cs,
         "hsn": {"hsn_b2c": hsn_items}
     }
-    return json.dumps(final_json).encode("utf-8")
 
 # ============================================================
-# STREAMLIT UI
+# STREAMLIT INTERFACE
 # ============================================================
-st.title("GSTR-1 JSON Generator (Fixed for Portal Rejection)")
-
-uploaded_zip = st.file_uploader("Upload ZIP file", type="zip")
+st.title("GSTR-1 JSON Generator (Portal-Ready)")
+uploaded_zip = st.file_uploader("Upload the 'gst_363666_1_2026.zip' file", type="zip")
 
 if uploaded_zip and st.button("Generate GSTR-1 JSON"):
-    with zipfile.ZipFile(uploaded_zip) as z:
-        all_files = z.namelist()
-        sales_name = next(f for f in all_files if "sale" in f.lower())
-        return_names = [f for f in all_files if "return" in f.lower()]
+    try:
+        with zipfile.ZipFile(uploaded_zip) as z:
+            all_files = z.namelist()
+            # Identifying files based on your zip structure
+            sales_file = next(f for f in all_files if "sales.xlsx" in f.lower() or "sales" in f.lower())
+            returns_file = next((f for f in all_files if "return" in f.lower()), None)
 
-        with z.open(sales_name) as f:
-            wb = load_workbook(f, data_only=True)
-            ws = wb.active
-            gstin = str(ws["C2"].value).strip()
-            fp = f"{str(ws['P2'].value).zfill(2)}{ws['O2'].value}"
-            supplier_state_code = gstin[:2]
-            df_combined = process_file(f, "SALE")
+            # Load Sales to get GSTIN and Period
+            with z.open(sales_file) as f:
+                df_sales_raw = pd.read_csv(f) if sales_file.endswith('.csv') else pd.read_excel(f)
+                gstin = str(df_sales_raw['gstin'].iloc[0]).strip()
+                month = str(df_sales_raw['month_number'].iloc[0]).zfill(2)
+                year = str(df_sales_raw['financial_year'].iloc[0])
+                fp = f"{month}{year}"
+                supplier_state_code = gstin[:2]
+                
+                df_combined = process_data(df_sales_raw, "SALE", supplier_state_code)
 
-        for r_name in return_names:
-            with z.open(r_name) as rf:
-                df_combined = pd.concat([df_combined, process_file(rf, "RETURN")], ignore_index=True)
+            # Load Returns if present
+            if returns_file:
+                with z.open(returns_file) as f:
+                    df_returns_raw = pd.read_csv(f) if returns_file.endswith('.csv') else pd.read_excel(f)
+                    df_combined = pd.concat([df_combined, process_data(df_returns_raw, "RETURN", supplier_state_code)], ignore_index=True)
 
-        df_combined = calculate_tax(df_combined, supplier_state_code)
-        json_output = generate_gstr1_json(df_combined, gstin, fp, supplier_state_code)
-
-        st.success(f"Generated JSON for GSTIN {gstin}")
-        st.download_button("⬇️ Download GSTR-1 JSON", json_output, f"{gstin}_{fp}_offline.json")
+            # Final JSON Generation
+            final_json = generate_gstr1_json(df_combined, gstin, fp, supplier_state_code)
+            
+            st.success(f"Success! Generated JSON for GSTIN: {gstin} | Period: {fp}")
+            st.download_button(
+                label="⬇️ Download GSTR-1 JSON",
+                data=json.dumps(final_json, indent=4).encode("utf-8"),
+                file_name=f"{gstin}_{fp}_GSTR1.json",
+                mime="application/json"
+            )
+    except Exception as e:
+        st.error(f"Error processing files: {str(e)}")
